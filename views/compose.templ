@@ -1,0 +1,129 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bketelsen/bespoke/pkg/auth"
+	"github.com/bketelsen/bespoke/pkg/ui"
+	"github.com/bketelsen/bespoke/pkg/ui/components/button"
+	"github.com/bketelsen/bespoke/pkg/ui/components/input"
+	"github.com/bketelsen/bespoke/pkg/ui/components/textarea"
+)
+
+templ Compose(user auth.User, accounts []Account, d Draft, returnTo, problem string) {
+	@ui.AppShell(ui.ShellProps{Title: "Mail", User: user, Width: ui.ShellWidthWide}) {
+		<div class="mx-auto max-w-4xl">
+			<div class="flex items-center justify-between gap-3">
+				<a href="/" class="text-sm text-primary hover:underline">← Mail</a>
+				if d.Status == "sent" {
+					<span class="text-sm font-medium text-primary">Sent</span>
+				}
+			</div>
+			<h1 class="mt-4 text-2xl font-semibold tracking-tight">New Message</h1>
+			if problem != "" {
+				<div class="mt-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{ problem }</div>
+			}
+			if d.Detail != "" {
+				<div class="mt-4 rounded-md border p-3 text-sm">{ d.Detail }</div>
+			}
+			<form method="post" action={ draftAction(d.ID) } class="mt-5 overflow-hidden rounded-lg border bg-card shadow-sm" data-mail-compose data-draft-id={ draftID(d.ID) }>
+				<input type="hidden" name="return_to" value={ returnTo }/>
+				<div class="grid gap-px bg-border">
+					<div class="grid grid-cols-[5rem_1fr] items-center bg-card px-4 py-2">
+						<label for="account" class="text-sm text-muted-foreground">From</label>
+						<select id="account" name="account_id" class="h-9 min-w-0 bg-transparent text-sm outline-none" required disabled?={ d.Status == "sent" }>
+							<option value="">Choose account</option>
+							for _, account := range accounts {
+								<option value={ fmt.Sprint(account.ID) } selected?={ account.ID == d.AccountID }>{ account.Email }</option>
+							}
+						</select>
+					</div>
+					@composeField("to", "To", d.To, d.Status == "sent")
+					@composeField("cc", "Cc", d.Cc, d.Status == "sent")
+					@composeField("bcc", "Bcc", d.Bcc, d.Status == "sent")
+					@composeField("subject", "Subject", d.Subject, d.Status == "sent")
+				</div>
+				<div class="bg-card p-4">
+					@textarea.Textarea(textarea.Props{Name: "body", Value: d.Body, Rows: 18, Class: "min-h-[45dvh] resize-y border-0 p-0 shadow-none focus-visible:ring-0", Disabled: d.Status == "sent", Placeholder: "Write your message…"})
+				</div>
+				if d.Status != "sent" {
+					<div class="flex items-center justify-between gap-3 border-t bg-muted/20 px-4 py-3">
+						<div class="flex items-center gap-3">
+							@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline}) { Save draft }
+							<span class="text-xs text-muted-foreground" aria-live="polite" data-autosave-status>Saved</span>
+						</div>
+						if d.ID != 0 {
+							@button.Button(button.Props{Type: button.TypeSubmit, Form: "send-draft"}) { Send now }
+						}
+					</div>
+				}
+			</form>
+			if d.ID != 0 && d.Status != "sent" {
+				<form id="send-draft" method="post" action={ templ.SafeURL(fmt.Sprintf("/drafts/%d/send", d.ID)) } data-send-draft>
+					<input type="hidden" name="return_to" value={ returnTo }/>
+				</form>
+				<div class="mt-4 rounded-lg border bg-card p-4">
+					<h2 class="text-sm font-medium">Attachments</h2>
+					if len(d.Attachments) > 0 {
+						<div class="mt-3 space-y-2">
+							for _, item := range d.Attachments {
+								<div class="flex items-center gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm">
+									<span class="min-w-0 flex-1 truncate">{ item.Filename }</span>
+									<span class="shrink-0 text-xs text-muted-foreground">{ fileSize(item.SizeBytes) }</span>
+								<form method="post" action={ templ.SafeURL(fmt.Sprintf("/drafts/%d/attachments/%d/remove", d.ID, item.ID)) }>
+									<input type="hidden" name="return_to" value={ returnTo }/>
+									<button type="submit" class="text-xs text-destructive hover:underline">Remove</button>
+									</form>
+								</div>
+							}
+						</div>
+					}
+					<form method="post" enctype="multipart/form-data" action={ templ.SafeURL(fmt.Sprintf("/drafts/%d/attachments", d.ID)) } class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center" data-attachment-upload>
+						<input type="hidden" name="return_to" value={ returnTo }/>
+						<input type="file" name="attachment" required class="min-w-0 flex-1 text-sm file:mr-3 file:rounded-md file:border file:bg-background file:px-3 file:py-1.5" data-attachment-input/>
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline}) { Attach file }
+					</form>
+					<p class="mt-2 text-xs text-muted-foreground" data-attachment-status>Choosing a file attaches it immediately. Up to 25 MiB total.</p>
+				</div>
+				<form method="post" action={ templ.SafeURL(fmt.Sprintf("/drafts/%d/delete", d.ID)) } class="mt-4 text-right">
+					<button type="submit" class="text-sm text-destructive hover:underline">Delete draft</button>
+				</form>
+			}
+			if len(accounts) == 0 {
+				<p class="mt-4 text-sm text-muted-foreground">Connect a sending account in <a href="/settings/accounts" class="text-primary underline">Mail settings</a>.</p>
+			}
+		</div>
+		<script type="module" src="/_mail/compose.js"></script>
+	}
+}
+
+func fileSize(bytes int64) string {
+	if bytes >= 1<<20 {
+		return fmt.Sprintf("%.1f MiB", float64(bytes)/float64(1<<20))
+	}
+	if bytes >= 1<<10 {
+		return fmt.Sprintf("%.1f KiB", float64(bytes)/float64(1<<10))
+	}
+	return fmt.Sprintf("%d B", bytes)
+}
+
+templ composeField(name, title, value string, disabled bool) {
+	<div class="grid grid-cols-[5rem_1fr] items-center bg-card px-4 py-2">
+		<label for={ name } class="text-sm text-muted-foreground">{ title }</label>
+		@input.Input(input.Props{ID: name, Name: name, Value: value, Disabled: disabled, Class: "border-0 px-0 shadow-none focus-visible:ring-0"})
+	</div>
+}
+
+func draftAction(id int64) templ.SafeURL {
+	if id == 0 {
+		return "/drafts"
+	}
+	return templ.SafeURL(fmt.Sprintf("/drafts/%d", id))
+}
+
+func draftID(id int64) string {
+	if id == 0 {
+		return ""
+	}
+	return fmt.Sprint(id)
+}

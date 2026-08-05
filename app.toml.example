@@ -1,0 +1,14 @@
+# Copy to <your-instance>/apps/mail/app.toml — the directory name must be
+# `mail`, which is also this app's database, process, and subdomain name.
+# `port` is yours to choose: any free port in 4101-4999.
+port        = 4110
+name        = "Mail"
+slug        = "mail"
+icon        = "mail"
+description = "A private, local-first client for Gmail and iCloud Mail"
+package     = "github.com/bketelsen/bespoke-app-mail"
+
+[[intents]]
+name    = "compose-email"
+title   = "Compose Email"
+accepts = "text"

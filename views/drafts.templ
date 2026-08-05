@@ -1,0 +1,63 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/bketelsen/bespoke/pkg/auth"
+	"github.com/bketelsen/bespoke/pkg/ui"
+	"github.com/bketelsen/bespoke/pkg/ui/components/icon"
+)
+
+templ Drafts(user auth.User, drafts []DraftSummary) {
+	@ui.AppShell(ui.ShellProps{Title: "Mail Drafts", User: user, Width: ui.ShellWidthWide}) {
+		<div class="mx-auto max-w-4xl">
+			<div class="flex items-center justify-between gap-3">
+				<div>
+					<a href="/" class="text-sm text-primary hover:underline">← Mail</a>
+					<h1 class="mt-3 text-2xl font-semibold tracking-tight">Drafts</h1>
+				</div>
+				<a href="/compose" class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
+					@icon.SquarePen(icon.Props{Class: "size-4"})
+					New message
+				</a>
+			</div>
+			<div class="mt-5 overflow-hidden rounded-lg border bg-card">
+				if len(drafts) == 0 {
+					<div class="p-10 text-center">
+						@icon.FileText(icon.Props{Class: "mx-auto size-8 text-muted-foreground"})
+						<p class="mt-3 text-sm text-muted-foreground">No unsent drafts.</p>
+					</div>
+				} else {
+					for _, d := range drafts {
+						<a href={ templ.SafeURL(fmt.Sprintf("/drafts/%d", d.ID)) } class="block border-b px-4 py-3 last:border-b-0 hover:bg-muted/50">
+							<div class="flex items-baseline gap-3">
+								<span class="min-w-0 flex-1 truncate text-sm font-medium">{ draftRecipients(d.To) }</span>
+								<time class="shrink-0 text-xs text-muted-foreground">{ shortTime(d.UpdatedAt) }</time>
+							</div>
+							<div class="mt-0.5 flex items-center gap-2 text-sm">
+								<span class="truncate">{ subject(d.Subject) }</span>
+								if d.AttachmentCount > 0 {
+									@icon.Paperclip(icon.Props{Class: "size-3.5 shrink-0 text-muted-foreground"})
+								}
+								if d.Status == "error" {
+									<span class="shrink-0 text-xs text-destructive">Send failed</span>
+								}
+							</div>
+							if d.Detail != "" {
+								<p class="mt-1 truncate text-xs text-muted-foreground">{ d.Detail }</p>
+							}
+						</a>
+					}
+				}
+			</div>
+		</div>
+	}
+}
+
+func draftRecipients(values []string) string {
+	if len(values) == 0 {
+		return "No recipients"
+	}
+	return strings.Join(values, ", ")
+}

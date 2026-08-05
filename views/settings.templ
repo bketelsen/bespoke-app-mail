@@ -1,0 +1,109 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bketelsen/bespoke/pkg/auth"
+	"github.com/bketelsen/bespoke/pkg/ui"
+	"github.com/bketelsen/bespoke/pkg/ui/components/button"
+	"github.com/bketelsen/bespoke/pkg/ui/components/card"
+	"github.com/bketelsen/bespoke/pkg/ui/components/input"
+	"github.com/bketelsen/bespoke/pkg/ui/components/label"
+)
+
+templ AccountSettings(user auth.User, accounts []Account, vaultReady, googleReady bool, notice, problem string) {
+	@ui.AppShell(ui.ShellProps{Title: "Mail", User: user, Width: ui.ShellWidthWide}) {
+		<div class="mx-auto max-w-3xl">
+			<a href="/" class="text-sm text-primary hover:underline">← Mail</a>
+			<div class="mt-4">
+				<h1 class="text-2xl font-semibold tracking-tight">Accounts</h1>
+				<p class="mt-1 text-sm text-muted-foreground">Gmail uses Google authorization. iCloud uses an Apple app-specific password.</p>
+			</div>
+			if notice != "" {
+				<div class="mt-4 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">{ notice }</div>
+			}
+			if problem != "" {
+				<div class="mt-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{ problem }</div>
+			}
+			<div class="mt-6 space-y-3">
+				for _, a := range accounts {
+					@card.Card() {
+						@card.Content(card.ContentProps{Class: "flex flex-wrap items-center gap-3 pt-6"}) {
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">{ a.Email }</div>
+								<div class="text-xs capitalize text-muted-foreground">{ a.Provider } · { a.Status }</div>
+								if a.StatusDetail != "" {
+									<div class="mt-1 text-xs text-muted-foreground">{ a.StatusDetail }</div>
+								}
+								if a.LastSyncAt != nil {
+									<div class="mt-1 text-xs text-muted-foreground">Last synced { a.LastSyncAt.Local().Format("Jan 2 at 3:04 PM") }</div>
+								}
+							</div>
+							<form method="post" action={ templ.SafeURL(fmt.Sprintf("/settings/accounts/%d/check", a.ID)) }>
+								@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline}) { Check connection }
+							</form>
+							<form method="post" action={ templ.SafeURL(fmt.Sprintf("/settings/accounts/%d/sync", a.ID)) }>
+								@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline}) { Sync }
+							</form>
+							<details class="relative">
+								<summary class="cursor-pointer list-none text-sm text-destructive hover:underline [&::-webkit-details-marker]:hidden">Disconnect…</summary>
+								<div class="absolute right-0 top-7 z-20 w-72 rounded-lg border bg-popover p-4 text-popover-foreground shadow-md">
+									<p class="text-sm">Remove this account and its cached mail from Bespoke? Unsent drafts are preserved without a sending account.</p>
+									<form method="post" action={ templ.SafeURL(fmt.Sprintf("/settings/accounts/%d/disconnect", a.ID)) } class="mt-3">
+										<input type="hidden" name="confirm" value="disconnect"/>
+										@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) { Disconnect account }
+									</form>
+								</div>
+							</details>
+						}
+					}
+				}
+			</div>
+			<div class="mt-8 grid gap-5 md:grid-cols-2">
+				@card.Card() {
+					@card.Header() {
+						@card.Title() { Gmail }
+						@card.Description() { Connect with Google OAuth. }
+					}
+					@card.Content() {
+						if googleReady && vaultReady {
+							<a href="/oauth/google/start" class="inline-flex rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">Sign in with Google</a>
+						} else {
+							<button disabled class="inline-flex cursor-not-allowed rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground opacity-50">Sign in with Google</button>
+							<p class="mt-3 text-xs text-destructive">Google OAuth and credential encryption must be configured first.</p>
+						}
+					}
+				}
+				@card.Card() {
+					@card.Header() {
+						@card.Title() { iCloud Mail }
+						@card.Description() { Use a revocable app-specific password, never your Apple Account password. }
+					}
+					@card.Content() {
+						<form method="post" action="/settings/accounts/icloud" class="space-y-4">
+							<div class="space-y-2">
+								@label.Label(label.Props{For: "email"}) { Email }
+								@input.Input(input.Props{ID: "email", Name: "email", Type: input.TypeEmail, Required: true, Placeholder: "you@icloud.com"})
+							</div>
+							<div class="space-y-2">
+								@label.Label(label.Props{For: "password"}) { App-specific password }
+								@input.Input(input.Props{ID: "password", Name: "password", Type: input.TypePassword, Required: true, Attributes: templ.Attributes{"autocomplete": "new-password"}})
+							</div>
+							@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !vaultReady}) { Add iCloud account }
+						</form>
+						if !vaultReady {
+							<p class="mt-3 text-xs text-destructive">Credential encryption must be configured before adding accounts.</p>
+						}
+					}
+				}
+			</div>
+		</div>
+	}
+}
+
+templ DashCard(unread int, healthy, total int) {
+	<div>
+		<div class="text-2xl font-semibold tabular-nums">{ fmt.Sprint(unread) }</div>
+		<div class="text-sm text-muted-foreground">unread · { fmt.Sprintf("%d of %d accounts healthy", healthy, total) }</div>
+	</div>
+}

@@ -1,0 +1,227 @@
+package views
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/bketelsen/bespoke/pkg/auth"
+	"github.com/bketelsen/bespoke/pkg/ui"
+	"github.com/bketelsen/bespoke/pkg/ui/components/icon"
+)
+
+templ Home(user auth.User, d WorkspaceData) {
+	@ui.AppShell(ui.ShellProps{Title: "Mail", User: user, Width: ui.ShellWidthFull}) {
+		@Workspace(d)
+		<script src="/_mail/reader.js" defer></script>
+	}
+}
+
+templ Workspace(d WorkspaceData) {
+	<div
+		id="mail-workspace"
+		class="-mx-4 -my-8 min-h-[calc(100dvh-57px)] bg-card lg:grid lg:grid-cols-[15rem_22rem_minmax(0,1fr)]"
+		if d.Live {
+			data-init="@get('/_live')"
+		}
+	>
+			@MailboxSidebar(d)
+			@MessageList(d)
+			@Reader(d.Selected)
+	</div>
+}
+
+templ MailboxSidebar(d WorkspaceData) {
+	<aside class="hidden border-r bg-muted/30 lg:block">
+		<div class="flex items-center justify-between border-b px-4 py-3">
+			<h1 class="font-semibold">Mailboxes</h1>
+			<a href="/settings/accounts" class="pointer-coarse:size-8 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted" aria-label="Mail settings">
+				@icon.Settings(icon.Props{Class: "size-4"})
+			</a>
+		</div>
+		<nav class="max-h-[calc(100dvh-110px)] overflow-y-auto p-2" aria-label="Mailboxes">
+			<a href="/" class={ "mb-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-primary hover:bg-muted", templ.KV("bg-muted", d.CurrentMailbox == "All Inboxes") }>
+				@icon.Inbox(icon.Props{Class: "size-4"})
+				<span class="flex-1">All Inboxes</span>
+			</a>
+			<a href="/drafts" class="mb-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted">
+				@icon.FileText(icon.Props{Class: "size-4 text-muted-foreground"})
+				<span class="flex-1">Drafts</span>
+			</a>
+			for i, mb := range d.Mailboxes {
+				if i == 0 || d.Mailboxes[i-1].AccountName != mb.AccountName {
+					<div class={ "px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground", templ.KV("mt-4", i > 0), templ.KV("mt-3", i == 0) }>
+						{ mb.AccountName }
+					</div>
+				}
+				<a href={ templ.SafeURL(fmt.Sprintf("/mailboxes/%d", mb.ID)) } class={ "flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted", templ.KV("bg-muted font-medium", mb.Selected) }>
+					@icon.Folder(icon.Props{Class: "size-4 text-muted-foreground"})
+					<span class="min-w-0 flex-1 truncate">{ mb.Name }</span>
+					if mb.Unread > 0 {
+						<span class="text-xs tabular-nums text-muted-foreground">{ fmt.Sprint(mb.Unread) }</span>
+					}
+				</a>
+			}
+		</nav>
+	</aside>
+}
+
+templ MessageList(d WorkspaceData) {
+	<section class={ "border-r", templ.KV("hidden md:block", d.Selected != nil) } aria-label="Messages">
+		<div class="flex items-center gap-2 border-b px-3 py-2.5">
+			<details class="relative lg:hidden">
+				<summary class="pointer-coarse:size-8 flex size-8 cursor-pointer list-none items-center justify-center rounded-md hover:bg-muted [&::-webkit-details-marker]:hidden" aria-label="Choose mailbox">
+					@icon.Menu(icon.Props{Class: "size-4"})
+				</summary>
+				<div class="absolute left-0 top-10 z-50 max-h-[70dvh] w-72 overflow-y-auto rounded-lg border bg-popover p-2 shadow-md">
+					<a href="/" class="block rounded-md px-3 py-2 text-sm font-medium hover:bg-muted">All Inboxes</a>
+					<a href="/drafts" class="block rounded-md px-3 py-2 text-sm hover:bg-muted">Drafts</a>
+					for i, mb := range d.Mailboxes {
+						if i == 0 || d.Mailboxes[i-1].AccountName != mb.AccountName {
+							<div class={ "px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground", templ.KV("mt-3", i > 0), templ.KV("mt-2", i == 0) }>
+								{ mb.AccountName }
+							</div>
+						}
+						<a href={ templ.SafeURL(fmt.Sprintf("/mailboxes/%d", mb.ID)) } class="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-muted">
+							<span class="truncate">{ mb.Name }</span>
+						if mb.Unread > 0 {
+							<span>{ fmt.Sprint(mb.Unread) }</span>
+						}
+						</a>
+					}
+				</div>
+			</details>
+			<h2 class="min-w-0 flex-1 truncate font-semibold">{ currentMailboxName(d.CurrentMailbox) }</h2>
+			<a href={ composeURL(d.CurrentPath) } class="pointer-coarse:size-8 flex size-8 items-center justify-center rounded-md text-primary hover:bg-muted" aria-label="Compose">
+				@icon.SquarePen(icon.Props{Class: "size-4"})
+			</a>
+		</div>
+		<div class="max-h-[calc(100dvh-106px)] overflow-y-auto">
+			if len(d.Accounts) == 0 {
+				<div class="p-6 text-center">
+					@icon.Mail(icon.Props{Class: "mx-auto size-8 text-muted-foreground"})
+					<h2 class="mt-3 font-semibold">Connect your mail</h2>
+					<p class="mt-1 text-sm text-muted-foreground">Add Gmail or iCloud to begin.</p>
+					<a href="/settings/accounts" class="mt-4 inline-flex rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">Add account</a>
+				</div>
+			} else if len(d.Messages) == 0 {
+				<p class="p-6 text-center text-sm text-muted-foreground">No cached messages yet. Sync an account to begin.</p>
+			} else {
+				for _, m := range d.Messages {
+					<a href={ templ.SafeURL(fmt.Sprintf("/messages/%d?mailbox_id=%d", m.ID, m.MailboxID)) } class={ "block border-b border-l-2 px-4 py-3 hover:bg-muted/60", templ.KV("border-l-primary", !m.IsRead), templ.KV("border-l-transparent", m.IsRead), templ.KV("bg-primary/5", d.Selected != nil && d.Selected.ID == m.ID) }>
+						<div class="flex items-baseline gap-2">
+							<span class={ "min-w-0 flex-1 truncate text-sm", templ.KV("font-semibold", !m.IsRead) }>{ sender(m) }</span>
+							<time class="shrink-0 text-xs text-muted-foreground">{ shortTime(m.ReceivedAt) }</time>
+						</div>
+						<div class={ "truncate text-sm", templ.KV("font-medium", !m.IsRead) }>{ subject(m.Subject) }</div>
+						<p class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{ m.Preview }</p>
+					</a>
+				}
+			}
+		</div>
+	</section>
+}
+
+func composeURL(returnTo string) templ.SafeURL {
+	if returnTo == "" {
+		return "/compose"
+	}
+	return templ.SafeURL("/compose?return_to=" + url.QueryEscape(returnTo))
+}
+
+func currentMailboxName(name string) string {
+	if name == "" {
+		return "Inbox"
+	}
+	return name
+}
+
+templ Reader(m *MessageDetail) {
+	<section class={ "min-w-0", templ.KV("hidden md:block", m == nil) } aria-label="Message">
+		if m == nil {
+			<div class="flex min-h-[calc(100dvh-57px)] items-center justify-center text-sm text-muted-foreground">Select a message to read</div>
+		} else {
+			<div class="flex items-center gap-2 overflow-x-auto border-b px-3 py-2.5">
+				<a href={ templ.SafeURL(fmt.Sprintf("/mailboxes/%d", m.MailboxID)) } class="pointer-coarse:size-8 flex size-8 items-center justify-center rounded-md hover:bg-muted md:hidden" aria-label="Back to messages">
+					@icon.ArrowLeft(icon.Props{Class: "size-4"})
+				</a>
+				<div class="flex-1"></div>
+				@messageAction(m, readAction(m), readActionLabel(m))
+				@messageAction(m, starAction(m), starActionLabel(m))
+				@messageAction(m, "archive", "Archive")
+				@messageAction(m, "trash", "Move to Trash")
+				@responseDraftAction(m, "reply", "Reply")
+				@responseDraftAction(m, "reply-all", "Reply all")
+				@responseDraftAction(m, "forward", "Forward")
+			</div>
+			<article class="max-h-[calc(100dvh-106px)] overflow-y-auto px-5 py-6 sm:px-8">
+				<h1 class="text-xl font-semibold tracking-tight">{ subject(m.Subject) }</h1>
+				<div class="mt-4 border-b pb-4 text-sm">
+					<div><span class="font-medium">{ sender(m.Message) }</span> <span class="text-muted-foreground">&lt;{ m.FromAddress }&gt;</span></div>
+					if len(m.To) > 0 {
+						<div class="mt-1 text-xs text-muted-foreground">To { strings.Join(m.To, ", ") }</div>
+					}
+				</div>
+				if m.HasHTMLBody {
+					<iframe
+						src={ templ.SafeURL(fmt.Sprintf("/messages/%d/html", m.ID)) }
+						sandbox="allow-scripts"
+						data-mail-html
+						title="Message content"
+						class="mt-6 min-h-[32rem] w-full border-0 bg-white"
+					></iframe>
+				} else {
+					<div class="mt-6 whitespace-pre-wrap break-words text-sm leading-relaxed">{ m.TextBody }</div>
+				}
+				if len(m.Attachments) > 0 {
+					<div class="mt-8 border-t pt-4">
+						<h2 class="text-sm font-medium">Attachments</h2>
+						<div class="mt-2 flex flex-wrap gap-2">
+							for _, item := range m.Attachments {
+								<a href={ templ.SafeURL(fmt.Sprintf("/attachments/%d", item.ID)) } class="inline-flex max-w-full items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm hover:bg-muted">
+									@icon.Paperclip(icon.Props{Class: "size-4 shrink-0"})
+									<span class="truncate">{ item.Filename }</span>
+								</a>
+							}
+						</div>
+					</div>
+				}
+			</article>
+		}
+	</section>
+}
+
+templ responseDraftAction(m *MessageDetail, mode, label string) {
+	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/messages/%d/drafts/%s", m.ID, mode)) } class="shrink-0">
+		<button type="submit" class="pointer-coarse:size-8 flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted" aria-label={ label } title={ label }>
+			switch mode {
+				case "reply":
+					@icon.Reply(icon.Props{Class: "size-4"})
+				case "reply-all":
+					@icon.ReplyAll(icon.Props{Class: "size-4"})
+				case "forward":
+					@icon.Forward(icon.Props{Class: "size-4"})
+			}
+		</button>
+	</form>
+}
+
+templ messageAction(m *MessageDetail, action, label string) {
+	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/messages/%d/actions/%s", m.ID, action)) } class="shrink-0">
+		<input type="hidden" name="mailbox_id" value={ fmt.Sprint(m.MailboxID) }/>
+		<button type="submit" class="pointer-coarse:size-8 flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted" aria-label={ label } title={ label }>
+			switch action {
+				case "mark-read":
+					@icon.MailOpen(icon.Props{Class: "size-4"})
+				case "mark-unread":
+					@icon.Mail(icon.Props{Class: "size-4"})
+				case "star", "unstar":
+					@icon.Star(icon.Props{Class: "size-4"})
+				case "archive":
+					@icon.Archive(icon.Props{Class: "size-4"})
+				case "trash":
+					@icon.Trash2(icon.Props{Class: "size-4"})
+			}
+		</button>
+	</form>
+}
