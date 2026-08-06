@@ -29,6 +29,7 @@ func mailToolJSON(value any) (string, error) {
 func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSynchronizer, queueSync func(string, int64) error) {
 	web.Tool(mux, web.ToolDef{
 		Name:        "list_mail_accounts",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "List the user's connected mail accounts, IDs, provider, health, and last sync time. Does not expose credentials.",
 		Schema:      mailObject(map[string]any{}),
 		Handler: func(ctx context.Context, user auth.User, _ json.RawMessage) (string, error) {
@@ -51,6 +52,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "search_mail",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "Search the user's locally cached mail by sender, recipient, subject, preview, or cached plain-text body. Returns message links and never contacts a provider.",
 		Schema: mailObject(map[string]any{
 			"query": map[string]any{"type": "string"},
@@ -72,6 +74,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "get_mail_message",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "Read one user-owned message, fetching and caching only its safe plain-text MIME part when needed. HTML and attachment bytes are not returned.",
 		Schema: mailObject(map[string]any{
 			"message_id": map[string]any{"type": "integer"},
@@ -111,6 +114,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "list_mail_drafts",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "List the user's unsent drafts with IDs, recipients, status, update time, and attachment count for review or follow-up editing.",
 		Schema:      mailObject(map[string]any{}),
 		Handler: func(ctx context.Context, user auth.User, _ json.RawMessage) (string, error) {
@@ -130,6 +134,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "get_mail_draft",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "Read one user-owned unsent or sent draft for review. Returns recipients, body, status, and attachment metadata but never attachment bytes.",
 		Schema: mailObject(map[string]any{
 			"draft_id": map[string]any{"type": "integer"},
@@ -432,6 +437,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "sync_accounts",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "Queue mail synchronization for all connected Gmail and iCloud accounts.",
 		Schema:      mailObject(map[string]any{}),
 		Handler: func(ctx context.Context, user auth.User, _ json.RawMessage) (string, error) {
@@ -460,6 +466,7 @@ func registerMailTools(mux *http.ServeMux, sqldb *sql.DB, synchronizer *mailSync
 
 	web.Tool(mux, web.ToolDef{
 		Name:        "check_mail_account",
+		Automation:  web.AutomationPolicy{Mode: web.AutomationReadOnly},
 		Description: "Verify IMAP and SMTP authentication for one connected mail account without reading messages or sending email.",
 		Schema: mailObject(map[string]any{
 			"account_id": map[string]any{"type": "integer"},

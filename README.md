@@ -10,7 +10,7 @@ before installing it, the same as any code you run as yourself.
 
 ## Install
 
-From your Bespoke instance directory, with the platform at v0.10.0 or newer:
+From your Bespoke instance directory, with the platform at v0.13.0 or newer:
 
 ```sh
 go tool bespoke add mail
@@ -33,6 +33,9 @@ process, and subdomain, and the source picks it.
   `smtp.gmail.com`, `gmail.googleapis.com`, `oauth2.googleapis.com`) and iCloud
   (`imap.mail.me.com`, `smtp.mail.me.com`). Remote images in HTML messages are
   not loaded.
+- **Publishes** events and in-app notifications to your own Bespoke instance
+  for new inbox mail, account sync failures, and send failures. They carry
+  sender, subject, and status detail — never message bodies or credentials.
 - **Never** sends your mail anywhere but the provider it came from.
 
 Set `BESPOKE_MAIL_KEY` (32 random bytes, base64) and the Google OAuth client

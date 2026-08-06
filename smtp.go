@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bketelsen/bespoke/pkg/events"
 	"github.com/emersion/go-imap/v2"
 )
 
@@ -64,6 +65,7 @@ func (s *mailSynchronizer) SendDraft(ctx context.Context, login string, draftID 
 	if err != nil {
 		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE drafts SET status='error',
 			status_detail=?, updated_at=datetime('now') WHERE id=? AND login=?`, truncateError(err), draftID, login)
+		publishDraftSendFailed(context.WithoutCancel(ctx), login, d, err)
 		return err
 	}
 	detail := ""
@@ -76,7 +78,40 @@ func (s *mailSynchronizer) SendDraft(ctx context.Context, login string, draftID 
 	}
 	_, err = s.db.ExecContext(ctx, `UPDATE drafts SET status='sent', status_detail=?,
 		updated_at=datetime('now') WHERE id=? AND login=?`, detail, draftID, login)
+	if err == nil {
+		data := map[string]any{"draft_id": draftID, "account": a.Email,
+			"to": d.To, "subject": d.Subject}
+		if detail != "" {
+			data["detail"] = detail
+		}
+		publishMailEvent(ctx, login, events.Event{Type: "mail.sent",
+			SubjectID: fmt.Sprint(draftID), Data: data})
+	}
 	return err
+}
+
+func publishDraftSendFailed(ctx context.Context, login string, d draft, sendErr error) {
+	detail := truncateError(sendErr)
+	var parts []string
+	if to := strings.Join(d.To, ", "); to != "" {
+		parts = append(parts, to)
+	}
+	if d.Subject != "" {
+		parts = append(parts, d.Subject)
+	}
+	body := strings.Join(append(parts, detail), " — ")
+	publishMailEvent(ctx, login, events.Event{
+		Type:      "mail.draft_send_failed",
+		SubjectID: fmt.Sprint(d.ID),
+		Data: map[string]any{"draft_id": d.ID, "to": d.To,
+			"subject": d.Subject, "error": detail},
+		Notification: &events.Notification{
+			Title:   "Message failed to send",
+			Body:    truncateBytes(body, maxNotificationBodyBytes),
+			AppSlug: "mail",
+			Path:    fmt.Sprintf("/drafts/%d", d.ID),
+		},
+	})
 }
 
 func (s *mailSynchronizer) appendSentCopy(ctx context.Context, a syncAccount, credential accountCredential, message []byte) error {

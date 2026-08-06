@@ -13,8 +13,8 @@ github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwTo
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/aymerick/douceur v0.2.0 h1:Mv+mAeH1Q+n9Fr+oyamOlAkUNPWPlA8PPGR0QAaYuPk=
 github.com/aymerick/douceur v0.2.0/go.mod h1:wlT5vV2O3h55X9m7iVYN0TBM0NH/MmbLnd30/FjWUq4=
-github.com/bketelsen/bespoke v0.10.0 h1:chXL+mUWQVDgZtDkOoCYkweoUmcVVewflgUvNHz2TTk=
-github.com/bketelsen/bespoke v0.10.0/go.mod h1:qvwYEGpt0j/ZDYEnx3FwgbDAMvcFwjUPjLJmOVOaJ5s=
+github.com/bketelsen/bespoke v0.13.0 h1:krrb63J8BC5urcntWargfbBybQHjfYdmRI3P9Dr2A9I=
+github.com/bketelsen/bespoke v0.13.0/go.mod h1:YvuuEGq4boamCrN8NxJjGyhfqIddJKTtNTHCkmBeX18=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cli/browser v1.3.0 h1:LejqCrpWr+1pRqmEPDGnTZOjsMe7sehifLynZJuqJpo=

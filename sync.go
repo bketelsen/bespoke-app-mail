@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bketelsen/bespoke/pkg/events"
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	gomessage "github.com/emersion/go-message"
@@ -353,9 +354,10 @@ func (s *mailSynchronizer) SyncAccount(ctx context.Context, login string, accoun
 		return errors.New("credential encryption is unavailable")
 	}
 	var a syncAccount
-	err := s.db.QueryRowContext(ctx, `SELECT id, login, provider, email,
+	var prevStatus string
+	err := s.db.QueryRowContext(ctx, `SELECT id, login, provider, email, status,
 		credential_ciphertext, credential_nonce FROM accounts WHERE id=? AND login=?`, accountID, login).
-		Scan(&a.ID, &a.Login, &a.Provider, &a.Email, &a.Ciphertext, &a.Nonce)
+		Scan(&a.ID, &a.Login, &a.Provider, &a.Email, &prevStatus, &a.Ciphertext, &a.Nonce)
 	if err != nil {
 		return err
 	}
@@ -366,6 +368,7 @@ func (s *mailSynchronizer) SyncAccount(ctx context.Context, login string, accoun
 	if a.Provider == "gmail" {
 		credential, err = s.freshGoogleCredential(ctx, a, credential)
 		if err != nil {
+			s.markSyncError(ctx, a, prevStatus, err)
 			return err
 		}
 	}
@@ -376,14 +379,38 @@ func (s *mailSynchronizer) SyncAccount(ctx context.Context, login string, accoun
 
 	err = s.syncIMAP(ctx, a, credential)
 	if err != nil {
-		detail := truncateError(err)
-		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE accounts SET status='error',
-			status_detail=?, updated_at=datetime('now') WHERE id=?`, detail, a.ID)
+		s.markSyncError(ctx, a, prevStatus, err)
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `UPDATE accounts SET status='healthy', status_detail='',
 		last_sync_at=datetime('now'), updated_at=datetime('now') WHERE id=?`, a.ID)
 	return err
+}
+
+// markSyncError records the failure and publishes mail.account_sync_failed
+// only on a non-error→error transition, so the 5-minute poller does not
+// notify again while the account stays broken.
+func (s *mailSynchronizer) markSyncError(ctx context.Context, a syncAccount, prevStatus string, syncErr error) {
+	ctx = context.WithoutCancel(ctx)
+	detail := truncateError(syncErr)
+	_, _ = s.db.ExecContext(ctx, `UPDATE accounts SET status='error',
+		status_detail=?, updated_at=datetime('now') WHERE id=?`, detail, a.ID)
+	if prevStatus == "error" {
+		return
+	}
+	publishMailEvent(ctx, a.Login, events.Event{
+		Type:      "mail.account_sync_failed",
+		SubjectID: fmt.Sprint(a.ID),
+		Data: map[string]any{"account_id": a.ID, "email": a.Email,
+			"provider": a.Provider, "detail": detail},
+		Notification: &events.Notification{
+			Title:    truncateBytes("Mail sync failing for "+a.Email, maxNotificationTitleBytes),
+			Body:     truncateBytes(detail, maxNotificationBodyBytes),
+			AppSlug:  "mail",
+			Path:     "/settings/accounts",
+			GroupKey: "mail:sync:" + a.Email,
+		},
+	})
 }
 
 func (s *mailSynchronizer) syncIMAP(ctx context.Context, a syncAccount, credential accountCredential) error {
@@ -563,8 +590,9 @@ func (s *mailSynchronizer) syncMailbox(ctx context.Context, client *imapclient.C
 	}
 	var mailboxID int64
 	var oldValidity, highestUID uint32
-	err = s.db.QueryRowContext(ctx, `SELECT id, uid_validity, highest_uid FROM mailboxes
-		WHERE account_id=? AND remote_name=?`, a.ID, remoteName).Scan(&mailboxID, &oldValidity, &highestUID)
+	var role string
+	err = s.db.QueryRowContext(ctx, `SELECT id, uid_validity, highest_uid, role FROM mailboxes
+		WHERE account_id=? AND remote_name=?`, a.ID, remoteName).Scan(&mailboxID, &oldValidity, &highestUID, &role)
 	if err != nil {
 		return err
 	}
@@ -575,6 +603,9 @@ func (s *mailSynchronizer) syncMailbox(ctx context.Context, client *imapclient.C
 		}
 		highestUID = 0
 	}
+	// A zero high-water mark means a first sync or UIDVALIDITY rebuild: every
+	// message is "new" to the cache, so backfill publishes no events.
+	backfill := highestUID == 0
 
 	if selected.NumMessages == 0 {
 		_, err = s.db.ExecContext(ctx, `UPDATE mailboxes SET uid_validity=?, highest_uid=0,
@@ -596,6 +627,7 @@ func (s *mailSynchronizer) syncMailbox(ctx context.Context, client *imapclient.C
 		return fmt.Errorf("fetch mailbox %q: %w", remoteName, err)
 	}
 	maxUID := uint32(0)
+	notified := 0
 	remoteUIDs := make(map[uint32]struct{}, len(messages))
 	for _, fetched := range messages {
 		if fetched.Envelope == nil || fetched.UID == 0 {
@@ -605,8 +637,13 @@ func (s *mailSynchronizer) syncMailbox(ctx context.Context, client *imapclient.C
 			maxUID = uint32(fetched.UID)
 		}
 		remoteUIDs[uint32(fetched.UID)] = struct{}{}
-		if err := s.storeEnvelope(ctx, a, mailboxID, fetched); err != nil {
+		messageID, inserted, err := s.storeEnvelope(ctx, a, mailboxID, fetched)
+		if err != nil {
 			return err
+		}
+		if inserted && !backfill && role == "inbox" && !slices.Contains(fetched.Flags, imap.FlagSeen) {
+			s.publishMailReceived(ctx, a, messageID, fetched.Envelope, notified < maxNewMailNotifications)
+			notified++
 		}
 	}
 	if err := s.reconcileMailboxWindow(ctx, mailboxID, remoteUIDs); err != nil {
@@ -659,7 +696,10 @@ func (s *mailSynchronizer) reconcileMailboxWindow(ctx context.Context, mailboxID
 	return tx.Commit()
 }
 
-func (s *mailSynchronizer) storeEnvelope(ctx context.Context, a syncAccount, mailboxID int64, fetched *imapclient.FetchMessageBuffer) error {
+// storeEnvelope upserts one fetched message and reports whether it created a
+// new local row. Sync is single-goroutine, so the pre-select cannot race the
+// upsert below it.
+func (s *mailSynchronizer) storeEnvelope(ctx context.Context, a syncAccount, mailboxID int64, fetched *imapclient.FetchMessageBuffer) (int64, bool, error) {
 	envelope := fetched.Envelope
 	received := fetched.InternalDate
 	if received.IsZero() {
@@ -669,8 +709,15 @@ func (s *mailSynchronizer) storeEnvelope(ctx context.Context, a syncAccount, mai
 		received = time.Now().UTC()
 	}
 	remoteKey := fmt.Sprintf("%d:%d", mailboxID, fetched.UID)
+	var existingID int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM messages WHERE account_id=? AND remote_key=?`,
+		a.ID, remoteKey).Scan(&existingID)
+	inserted := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !inserted {
+		return 0, false, err
+	}
 	var messageID int64
-	err := s.db.QueryRowContext(ctx, `INSERT INTO messages
+	err = s.db.QueryRowContext(ctx, `INSERT INTO messages
 		(account_id, remote_key, message_id, in_reply_to, subject, sent_at, received_at,
 		is_read, is_starred, size_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id, remote_key) DO UPDATE SET subject=excluded.subject,
@@ -682,15 +729,15 @@ func (s *mailSynchronizer) storeEnvelope(ctx context.Context, a syncAccount, mai
 		nullTime(envelope.Date), received.UTC().Format(time.RFC3339Nano),
 		slices.Contains(fetched.Flags, imap.FlagSeen), slices.Contains(fetched.Flags, imap.FlagFlagged), fetched.RFC822Size).Scan(&messageID)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO message_mailboxes (message_id, mailbox_id, remote_uid)
 		VALUES (?, ?, ?) ON CONFLICT(mailbox_id, remote_uid) DO UPDATE SET message_id=excluded.message_id`,
 		messageID, mailboxID, fetched.UID); err != nil {
-		return err
+		return 0, false, err
 	}
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM addresses WHERE message_id=?", messageID); err != nil {
-		return err
+		return 0, false, err
 	}
 	for kind, addresses := range map[string][]imap.Address{
 		"from": envelope.From, "to": envelope.To, "cc": envelope.Cc, "bcc": envelope.Bcc, "reply-to": envelope.ReplyTo,
@@ -702,11 +749,46 @@ func (s *mailSynchronizer) storeEnvelope(ctx context.Context, a syncAccount, mai
 			if _, err := s.db.ExecContext(ctx, `INSERT INTO addresses
 				(message_id, kind, position, name, address) VALUES (?, ?, ?, ?, ?)`,
 				messageID, kind, position, address.Name, address.Addr()); err != nil {
-				return err
+				return 0, false, err
 			}
 		}
 	}
-	return nil
+	return messageID, inserted, nil
+}
+
+// publishMailReceived reports one genuinely new, unread inbox message. Beyond
+// the per-mailbox notification cap the event still publishes without a
+// notification. The body structure has not been fetched yet, so the preview
+// and attachment flag are limited to what the envelope carries.
+func (s *mailSynchronizer) publishMailReceived(ctx context.Context, a syncAccount, messageID int64, envelope *imap.Envelope, notify bool) {
+	fromName, fromAddr := "", ""
+	if len(envelope.From) > 0 {
+		fromName, fromAddr = envelope.From[0].Name, envelope.From[0].Addr()
+	}
+	sender := fromName
+	if sender == "" {
+		sender = fromAddr
+	}
+	event := events.Event{
+		Type:      "mail.received",
+		SubjectID: fmt.Sprint(messageID),
+		Data: map[string]any{"message_id": messageID, "account": a.Email, "from": fromAddr,
+			"from_name": fromName, "subject": envelope.Subject, "has_attachments": false},
+	}
+	if notify {
+		title := "New message"
+		if sender != "" {
+			title = "New message from " + sender
+		}
+		event.Notification = &events.Notification{
+			Title:    truncateBytes(title, maxNotificationTitleBytes),
+			Body:     truncateBytes(envelope.Subject, maxNotificationBodyBytes),
+			AppSlug:  "mail",
+			Path:     fmt.Sprintf("/messages/%d", messageID),
+			GroupKey: "mail:" + a.Email,
+		}
+	}
+	publishMailEvent(ctx, a.Login, event)
 }
 
 func mailboxRole(provider, name string, attrs []imap.MailboxAttr) string {
