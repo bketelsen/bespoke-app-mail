@@ -33,9 +33,10 @@ process, and subdomain, and the source picks it.
   `smtp.gmail.com`, `gmail.googleapis.com`, `oauth2.googleapis.com`) and iCloud
   (`imap.mail.me.com`, `smtp.mail.me.com`). Remote images in HTML messages are
   not loaded.
-- **Publishes** events and in-app notifications to your own Bespoke instance
-  for new inbox mail, account sync failures, and send failures. They carry
-  sender, subject, and status detail — never message bodies or credentials.
+- **Publishes** events and in-app notifications to your own Bespoke instance —
+  the exact types, fields, and suppression rules are in
+  [Events and automation](#events-and-automation). They carry sender, subject,
+  and status detail — never message bodies or credentials.
 - **Never** sends your mail anywhere but the provider it came from.
 
 Set `BESPOKE_MAIL_KEY` (32 random bytes, base64) and the Google OAuth client
@@ -48,6 +49,76 @@ install. Read the source before you trust it.
 Like every Bespoke app it runs as your user, so nothing above is *enforced* by
 the platform — it is a description you can check against the source
 ([ADR-0031](https://github.com/bketelsen/bespoke/blob/main/docs/adr/0031-third-party-app-packages.md)).
+
+## Events and automation
+
+The app publishes domain events to your instance's platformd, which stores
+them durably, shows their notifications in the platform inbox, and matches
+automation rules against them
+([ADR-0035](https://github.com/bketelsen/bespoke/blob/main/docs/adr/0035-durable-events-notifications-automations.md)).
+Rules match on the exact `type` string and on condition paths under `data`, so
+the names below are the contract. Events publish only after the local write
+committed; a failed publish is logged and never fails or retries the sync or
+send that produced it.
+
+| Type | Fires when | Notification | `data` fields |
+| --- | --- | --- | --- |
+| `mail.received` | a sync stores a new, unread message in an inbox mailbox | first 10 per mailbox per sync | `message_id`, `account`, `from`, `from_name`, `subject`, `has_attachments` |
+| `mail.account_sync_failed` | an account's sync newly fails (non-error → error) | always | `account_id`, `email`, `provider`, `detail` |
+| `mail.draft_send_failed` | building or submitting a draft over SMTP fails | always | `draft_id`, `to`, `subject`, `error` |
+| `mail.sent` | a draft is accepted by SMTP and marked sent | never — silent | `draft_id`, `account`, `to`, `subject`, `detail` (when present) |
+
+Every event also carries the standard envelope: `id`, `type`, `subject_id`
+(the message, account, or draft ID as a string), `occurred_at`, `data`, and a
+`source` of `mail`.
+
+What a rule can rely on:
+
+- **`mail.received` means genuinely new mail, not cache churn.** It fires only
+  when a sync inserts a message row that did not exist locally, only for
+  mailboxes whose role is `inbox`, and only when the message is still unread.
+  Flag changes, moves, and re-fetches of known messages never fire it.
+- **Backfill is silent.** A mailbox with no UID high-water mark — its first
+  sync, or a cache rebuild after the server changes UIDVALIDITY — treats every
+  message as new, so it publishes nothing at all. The suppression is per
+  mailbox, so connecting an account never floods the event log with history.
+- **Notifications are capped; events are not.** The first 10 new messages per
+  mailbox per sync attach a notification — title `New message from <sender>`
+  (`from_name`, falling back to the address), body is the subject, path
+  `/messages/<message_id>`, group key `mail:<account email>` — and the rest of
+  that sync's new messages still publish, silently.
+- **`has_attachments` is always `false` at publish time.** Only the envelope
+  has been fetched when the event fires, so do not condition on it.
+- **`mail.account_sync_failed` fires once per outage.** It publishes only on
+  the transition into the `error` status — a Google token-refresh failure
+  counts — so the 5-minute background poller cannot re-notify while an account
+  stays broken; it can fire again only after a successful sync resets the
+  status. `detail` is the failure text truncated to 300 characters, and the
+  notification links to `/settings/accounts` under group key
+  `mail:sync:<email>`.
+- **`mail.draft_send_failed` fires on every failed attempt** — it is not
+  transition-gated. `to` is the draft's list of To addresses and `error` the
+  truncated failure text. The notification (title `Message failed to send`)
+  links back to `/drafts/<draft_id>`.
+- **`mail.sent` is silent** and publishes only after the draft row reaches
+  `sent`. `data.detail` appears only when SMTP accepted the message but the
+  iCloud Sent-mailbox copy could not be filed; Gmail retains its own copy, so
+  Gmail sends never carry it.
+
+Notification titles are truncated to 120 bytes and bodies to 500, on rune
+boundaries.
+
+### Tools available to automation
+
+Only the read-only tools opt into automation rules: `list_mail_accounts`,
+`search_mail`, `get_mail_message`, `list_mail_drafts`, `get_mail_draft`,
+`sync_accounts`, and `check_mail_account`. Every mutating or destructive tool
+— `create_draft`, `create_response_draft`, `update_draft`,
+`add_draft_text_attachment`, `remove_draft_attachment`, `delete_draft`,
+`send_draft`, `update_message`, `bulk_update_messages`, and
+`disconnect_mail_account` — declares no automation policy, so the platform
+refuses to run it from a rule. An automation can read, search, and check your
+mail and queue a sync; it can never write, send, or delete anything.
 
 ## Spec
 
